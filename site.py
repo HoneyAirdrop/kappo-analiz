@@ -8,7 +8,7 @@ import xml.etree.ElementTree as ET
 import re
 import difflib
 from email.utils import parsedate_to_datetime
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 # --- 1. AYARLAR VE API ---
 GOOGLE_API_KEY = st.secrets["GOOGLE_API_KEY"]
@@ -35,19 +35,21 @@ def arama_temizle_ve_sec():
 def sektor_secimi_guncelle():
     st.session_state.ana_hisse = st.session_state.sektor_kutusu
 
-# --- YARDIMCI FONKSİYONLAR ---
+# --- YARDIMCI FONKSİYONLAR VE SAAT DİLİMİ (TIMEZONE) ---
+
+# Sabit Türkiye Zaman Dilimi (UTC+3)
+TR_TZ = timezone(timedelta(hours=3))
+
 def haber_uygun_mu(baslik, ozet):
-    """Teknik analiz, hedef fiyat gibi istenmeyen magazin/analiz haberlerini filtreler."""
     istenmeyen_kelimeler = ["teknik analiz", "hedef fiyat", "grafik", "destek direnç", "destek ve direnç", "alım satım", "al-sat"]
     metin = (baslik + " " + ozet).lower()
     
     for kelime in istenmeyen_kelimeler:
         if kelime in metin:
-            return False # İçinde bu kelimeler varsa haberi reddet
+            return False 
     return True
 
 def html_temizle(raw_html, baslik=""):
-    """HTML etiketlerini temizler ve başlığın özette tekrar etmesini engeller."""
     if not raw_html:
         return ""
     
@@ -73,9 +75,15 @@ def html_temizle(raw_html, baslik=""):
 
 def tarih_formatla_ve_sirala(tarih_str):
     try:
+        # RSS'den gelen tarihi okur (Genelde UTC/GMT olur)
         dt = parsedate_to_datetime(tarih_str)
+        
+        # Eğer saatte bir dilim belirtilmemişse, onu zorla UTC kabul ederiz
         if dt.tzinfo is None:
             dt = dt.replace(tzinfo=timezone.utc)
+            
+        # Saati GARANTİLİ olarak Türkiye Saatine (UTC+3) çeviririz
+        dt = dt.astimezone(TR_TZ)
             
         gunler = ["Pazartesi", "Salı", "Çarşamba", "Perşembe", "Cuma", "Cumartesi", "Pazar"]
         aylar = ["", "Ocak", "Şubat", "Mart", "Nisan", "Mayıs", "Haziran", "Temmuz", "Ağustos", "Eylül", "Ekim", "Kasım", "Aralık"]
@@ -83,9 +91,12 @@ def tarih_formatla_ve_sirala(tarih_str):
         turkce_tarih = f"{gunler[dt.weekday()]}, {dt.day} {aylar[dt.month]} {dt.year} {dt.strftime('%H:%M:%S')}"
         return turkce_tarih, dt
     except:
-        return tarih_str, datetime.now(timezone.utc)
+        # Tarih bozuk gelirse, haberin en dibe düşmesi için onu 2000 yılına fırlatıyoruz
+        eski_tarih = datetime(2000, 1, 1, tzinfo=TR_TZ)
+        return tarih_str, eski_tarih
 
 # --- HABER ÇEKME MOTORLARI ---
+@st.cache_data(ttl=300) 
 def rss_haber_cek(arama_kelimesi, limit=15):
     try:
         query = urllib.parse.quote(arama_kelimesi)
@@ -110,7 +121,6 @@ def rss_haber_cek(arama_kelimesi, limit=15):
             turkce_tarih, dt_obj = tarih_formatla_ve_sirala(pub_date)
             temiz_ozet = html_temizle(description, baslik=title)
 
-            # Sadece filtremizden geçen uygun haberleri listeye ekliyoruz
             if haber_uygun_mu(title, temiz_ozet):
                 haberler.append({
                     "baslik": title,
@@ -160,7 +170,7 @@ def bloomberg_ht_cek(limit=30):
     except:
         return []
 
-# --- ÖZEL HTML/CSS HABER KARTI TASARIMI ---
+# --- ÖZEL HTML/CSS HABER KARTI TASARIMI (HİSSE, SEKTÖR VE ESKİ BLOOMBERG İÇİN) ---
 def haber_karti_olustur(haber, renk_temasi="mavi", sira_no=None, expander_icinde=False):
     if not expander_icinde:
         if renk_temasi == "mavi":
@@ -170,29 +180,67 @@ def haber_karti_olustur(haber, renk_temasi="mavi", sira_no=None, expander_icinde
         else: # yesil
             bg_color, border_color = "#062E1A", "#10B981"
     else:
-        bg_color = "#1F2937"  
+        bg_color = "#111827"  
         if renk_temasi == "mavi":
-            border_color = "#60A5FA" 
+            border_color = "#3B82F6" 
         elif renk_temasi == "sari":
-            border_color = "#FBBF24"
+            border_color = "#D97706"
         else:
-            border_color = "#34D399"
+            border_color = "#059669"
 
     if sira_no:
         ikon_kismi = f"<span style='background-color:{border_color}; color:#111; padding: 2px 7px; border-radius: 4px; font-weight: 900; margin-right: 6px;'>{sira_no}</span>"
     else:
         ikon_kismi = "🗓️ "
 
-    ozet_html = f"<p style='color:#A1A1AA; font-size: 14px; margin: 8px 0;'><em>{haber['ozet']}</em></p>" if len(haber['ozet']) > 5 else ""
+    text_color = "#F9FAFB" if not expander_icinde else "#D1D5DB"
+    ozet_html = f"<p style='color:#9CA3AF; font-size: 14px; margin: 8px 0;'><em>{haber['ozet']}</em></p>" if len(haber['ozet']) > 5 else ""
 
-    # DİKKAT: Markdown kod bloğuna dönüşmemesi için satır başlarındaki boşlukları (indentation) tamamen kaldırdık.
     html_kodu = f"""<div style="background-color: {bg_color}; border-left: 4px solid {border_color}; padding: 15px; border-radius: 5px; margin-bottom: 15px;">
-<div style="font-size: 13px; color: #9CA3AF; margin-bottom: 8px;">{ikon_kismi} <b>{haber['tarih']}</b></div>
-<div style="font-size: 16px; font-weight: bold; color: #F9FAFB;">{haber['baslik']}</div>
+<div style="font-size: 13px; color: #6B7280; margin-bottom: 8px;">{ikon_kismi} <b>{haber['tarih']}</b></div>
+<div style="font-size: 16px; font-weight: bold; color: {text_color};">{haber['baslik']}</div>
 {ozet_html}
 <a href="{haber['link']}" target="_blank" style="color: {border_color}; text-decoration: none; font-size: 14px; font-weight: bold; display: inline-block; margin-top: 8px;">Habere Git ↗</a>
 </div>"""
     st.markdown(html_kodu, unsafe_allow_html=True)
+
+
+# --- YENİ BLOOMBERG HT SON DAKİKA KARTI (KIRMIZI-SİYAH MİNİMAL TASARIM) ---
+def bloomberg_karti_olustur(haber, sira_no, expander_icinde=False):
+    saat = haber['dt_obj'].strftime('%H:%M')
+    
+    gunler = ["Pazartesi", "Salı", "Çarşamba", "Perşembe", "Cuma", "Cumartesi", "Pazar"]
+    aylar = ["", "Ocak", "Şubat", "Mart", "Nisan", "Mayıs", "Haziran", "Temmuz", "Ağustos", "Eylül", "Ekim", "Kasım", "Aralık"]
+    tarih_kisa = f"{haber['dt_obj'].day} {aylar[haber['dt_obj'].month]} {haber['dt_obj'].year}, {gunler[haber['dt_obj'].weekday()]}"
+    
+    bg_color = "#000000" if not expander_icinde else "#111827"
+    text_color = "#F9FAFB" if not expander_icinde else "#D1D5DB"
+
+    html_kodu = f"""
+    <div style="background-color: {bg_color}; border-bottom: 1px solid #374151; padding: 12px 5px; margin-bottom: 8px;">
+        <div style="display: flex; justify-content: space-between; align-items: flex-start;">
+            <div style="display: flex; align-items: center;">
+                <div style="border-left: 4px solid #DC2626; padding-left: 8px;">
+                    <div style="background-color: #FECACA; color: #991B1B; font-size: 16px; font-weight: 900; padding: 3px 8px; border-radius: 3px; display: inline-block;">
+                        {saat}
+                    </div>
+                </div>
+                <div style="margin-left: 12px; color: #6B7280; font-size: 14px; font-weight: bold;">
+                    #{sira_no}
+                </div>
+            </div>
+            <div style="color: #6B7280; font-size: 20px;">
+                <a href="{haber['link']}" target="_blank" style="color: inherit; text-decoration: none;">⇱</a>
+            </div>
+        </div>
+        <div style="color: #9CA3AF; font-size: 12px; margin-top: 8px; margin-bottom: 4px;">{tarih_kisa}</div>
+        <div style="color: {text_color}; font-size: 15px; font-weight: 800; font-family: sans-serif; line-height: 1.4;">
+            <a href="{haber['link']}" target="_blank" style="color: inherit; text-decoration: none;">{haber['baslik'].upper()}</a>
+        </div>
+    </div>
+    """
+    st.markdown(html_kodu, unsafe_allow_html=True)
+
 
 # --- BİST 100 KATEGORİK HİSSE LİSTESİ ---
 BIST_HISSELER = {
@@ -267,13 +315,13 @@ hisse_secenekleri = [f"{kod} - {isim}" for kod, isim in hisse_sozlugu.items()]
 
 st.sidebar.selectbox("Hisse Seçin:", options=hisse_secenekleri, key="sektor_kutusu", on_change=sektor_secimi_guncelle)
 tum_hisseler = sorted([f"{kod} - {isim}" for sektor, hisseler in BIST_HISSELER.items() for kod, isim in hisseler.items()])
-st.sidebar.selectbox("Hızlı Arama:", options=tum_hisseler, index=None, placeholder="Kodu veya tam adı yazın...", key="arama_kutusu", on_change=arama_temizle_ve_sec)
+st.sidebar.selectbox("Hızlı Arama (Seçince Temizlenir):", options=tum_hisseler, index=None, placeholder="Kodu veya tam adı yazın...", key="arama_kutusu", on_change=arama_temizle_ve_sec)
 
 secilen_kod = st.session_state.ana_hisse.split(" - ")[0]
 secilen_tam_isim = st.session_state.ana_hisse.split(" - ")[1]
 
 st.sidebar.markdown("---")
-st.sidebar.caption("Borsa Analiz (Kappo) v3.1")
+st.sidebar.caption("Borsa Analiz (Kappo) v3.5 | Filtre Analizi & TR Saat")
 
 # --- 4. ANA EKRAN YÖNETİMİ ---
 st.title("📈 Borsa Analiz (Kappo)")
@@ -289,7 +337,6 @@ if v:
         
         st.markdown("<br>", unsafe_allow_html=True)
         
-        # 1. BÖLÜM: HİSSE HABERLERİ (Artık ilk 3 tanesi görünüyor)
         st.subheader(f"📰 {secilen_kod} Hisse Haberleri")
         if v['hisse_haberleri']:
             for i, haber in enumerate(v['hisse_haberleri'][:3]):
@@ -304,7 +351,6 @@ if v:
                     
         st.markdown("---")
 
-        # 2. BÖLÜM: SEKTÖR HABERLERİ
         st.subheader(f"🏢 {v['sektor']} Sektörü Gelişmeleri")
         if v['sektor_haberleri']:
             for i, haber in enumerate(v['sektor_haberleri'][:3]):
@@ -319,14 +365,16 @@ if v:
 
         st.markdown("---")
 
-        # 3. BÖLÜM: BLOOMBERG HT SON DAKİKA
+        # ÖNCE ESKİ BLOOMBERG HT BÖLÜMÜ (Yeşil ve Kolonlu)
         st.subheader(f"🔴 Bloomberg HT Son Dakika Haberleri")
         st.caption("Piyasanın genel yönünü belirleyen en güncel makro gelişmeler.")
         
         bloomberg_haberler = bloomberg_ht_cek(limit=30)
         
+        # Karşılaştırma için şu anki saati UTC+3 (Türkiye Saati) olarak alıyoruz
+        suan = datetime.now(timezone.utc).astimezone(TR_TZ)
+        
         if bloomberg_haberler:
-            suan = datetime.now(timezone.utc)
             b_ilk_alti = bloomberg_haberler[:6]
             b_kalanlar = bloomberg_haberler[6:]
             
@@ -349,6 +397,25 @@ if v:
                         haber_karti_olustur(haber, "yesil", sira_no=devam_sirasi, expander_icinde=True)
         else:
             st.write("Şu an son dakika haberi çekilemiyor.")
+            
+        st.markdown("---")
+        
+        # YENİ EKLENEN BLOOMBERG HT BÖLÜMÜ (Kırmızı ve Minimal)
+        st.subheader(f"Bloomberg HT Son Dakika")
+        st.caption("Günün öne çıkan finansal akışı.")
+        
+        if bloomberg_haberler:
+            for i, haber in enumerate(b_ilk_alti):
+                sira_numarasi = i + 1 
+                bloomberg_karti_olustur(haber, sira_no=sira_numarasi, expander_icinde=False)
+                
+            if son_24_saatteki_haberler:
+                with st.expander(f"... Tüm Canlı Akışı Göster"):
+                    for i, haber in enumerate(son_24_saatteki_haberler):
+                        devam_sirasi = i + 7 
+                        bloomberg_karti_olustur(haber, sira_no=devam_sirasi, expander_icinde=True)
+        else:
+            st.write("Şu an canlı akış çekilemiyor.")
 
     # --- SAYFA 2: KAPPO AGENT SOHBETİ ---
     elif st.session_state.sayfa == 2:
