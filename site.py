@@ -315,13 +315,13 @@ hisse_secenekleri = [f"{kod} - {isim}" for kod, isim in hisse_sozlugu.items()]
 
 st.sidebar.selectbox("Hisse Seçin:", options=hisse_secenekleri, key="sektor_kutusu", on_change=sektor_secimi_guncelle)
 tum_hisseler = sorted([f"{kod} - {isim}" for sektor, hisseler in BIST_HISSELER.items() for kod, isim in hisseler.items()])
-st.sidebar.selectbox("Hızlı Arama (Seçince Temizlenir):", options=tum_hisseler, index=None, placeholder="Kodu veya tam adı yazın...", key="arama_kutusu", on_change=arama_temizle_ve_sec)
+st.sidebar.selectbox("Hızlı Arama:", options=tum_hisseler, index=None, placeholder="Kodu veya tam adı yazın...", key="arama_kutusu", on_change=arama_temizle_ve_sec)
 
 secilen_kod = st.session_state.ana_hisse.split(" - ")[0]
 secilen_tam_isim = st.session_state.ana_hisse.split(" - ")[1]
 
 st.sidebar.markdown("---")
-st.sidebar.caption("Borsa Analiz (Kappo) v3.5 | Filtre Analizi & TR Saat")
+st.sidebar.caption("Borsa Analiz (Kappo) v3.5")
 
 # --- 4. ANA EKRAN YÖNETİMİ ---
 st.title("📈 Borsa Analiz (Kappo)")
